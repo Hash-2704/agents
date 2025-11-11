@@ -50,6 +50,7 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
 )
+from .transcription.filler_filter import FillerWordsFilter
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
@@ -105,6 +106,11 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
+        
+        # filler words filter for interruption handling
+        self._filler_filter: FillerWordsFilter | None = None
+        if sess.options.filter_filler_only_interruptions:
+            self._filler_filter = FillerWordsFilter(filler_words=sess.options.filler_words)
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1120,6 +1126,34 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
+        
+        # Check if this is a filler-only interruption
+        if (
+            self.stt is not None
+            and self._filler_filter is not None
+            and self._audio_recognition is not None
+        ):
+            text = self._audio_recognition.current_transcript
+            filter_result = self._filler_filter.is_filler_only(text)
+            
+            if filter_result.is_filler_only:
+                logger.debug(
+                    "ignoring filler-only interruption",
+                    extra={
+                        "transcript": text,
+                        "filler_words": filter_result.filtered_words,
+                    }
+                )
+                return
+            else:
+                logger.debug(
+                    "valid interruption detected",
+                    extra={
+                        "transcript": text,
+                        "non_filler_words": filter_result.non_filler_words,
+                        "filler_words": filter_result.filtered_words,
+                    }
+                )
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
@@ -1287,6 +1321,37 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             # avoid interruption if the new_transcript is too short
             return False
+        
+        # Check if this is a filler-only end of turn
+        if (
+            self.stt is not None
+            and self._filler_filter is not None
+            and self._turn_detection_mode != "manual"
+            and self._current_speech is not None
+            and self._current_speech.allow_interruptions
+            and not self._current_speech.interrupted
+        ):
+            filter_result = self._filler_filter.is_filler_only(info.new_transcript)
+            
+            if filter_result.is_filler_only:
+                logger.debug(
+                    "ignoring filler-only end of turn",
+                    extra={
+                        "transcript": info.new_transcript,
+                        "filler_words": filter_result.filtered_words,
+                    }
+                )
+                self._cancel_preemptive_generation()
+                return False
+            else:
+                logger.debug(
+                    "valid end of turn detected",
+                    extra={
+                        "transcript": info.new_transcript,
+                        "non_filler_words": filter_result.non_filler_words,
+                        "filler_words": filter_result.filtered_words,
+                    }
+                )
 
         old_task = self._user_turn_completed_atask
         self._user_turn_completed_atask = self._create_speech_task(

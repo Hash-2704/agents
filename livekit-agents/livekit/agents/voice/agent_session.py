@@ -85,6 +85,8 @@ class VoiceOptions:
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
+    filter_filler_only_interruptions: bool
+    filler_words: Sequence[str] | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -169,6 +171,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
+        filter_filler_only_interruptions: bool = True,
+        filler_words: Sequence[str] | None = None,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -251,6 +255,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            filter_filler_only_interruptions (bool): Whether to filter out interruptions
+                that consist only of filler words (e.g., "um", "uh", "hmm"). This helps
+                prevent false interruptions when users are thinking. Default ``True``.
+            filler_words (Sequence[str], optional): Custom list of filler words to use.
+                If not provided, uses a default list covering multiple languages.
+                Only used if filter_filler_only_interruptions is True.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -291,6 +301,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
+            filter_filler_only_interruptions=filter_filler_only_interruptions,
+            filler_words=filler_words,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False

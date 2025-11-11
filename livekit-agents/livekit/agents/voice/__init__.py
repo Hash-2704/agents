@@ -24,6 +24,11 @@ from .room_io import (
 )
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer
+from .transcription.filler_filter import (
+    DEFAULT_FILLER_WORDS,
+    FillerFilterResult,
+    FillerWordsFilter,
+)
 
 __all__ = [
     "ChatCLI",
@@ -33,6 +38,9 @@ __all__ = [
     "ModelSettings",
     "AgentTask",
     "SpeechHandle",
+    "FillerWordsFilter",
+    "FillerFilterResult",
+    "DEFAULT_FILLER_WORDS",
     "RunContext",
     "UserInputTranscribedEvent",
     "AgentEvent",

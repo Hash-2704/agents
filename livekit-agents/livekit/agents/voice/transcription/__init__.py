@@ -1,9 +1,17 @@
 from ._utils import find_micro_track_id
+from .filler_filter import (
+    DEFAULT_FILLER_WORDS,
+    FillerFilterResult,
+    FillerWordsFilter,
+)
 from .synchronizer import TranscriptSynchronizer
 
 __all__ = [
     "TranscriptSynchronizer",
     "find_micro_track_id",
+    "FillerWordsFilter",
+    "FillerFilterResult",
+    "DEFAULT_FILLER_WORDS",
 ]
 
 # Cleanup docs of unexported modules
