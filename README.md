@@ -42,6 +42,34 @@ agents that can see, hear, and understand.
 - **Builtin test framework**: Write tests and use judges to ensure your agent is performing as expected.
 - **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
 
+## Branch Notes (cursor/filter-filler-only-transcription-segments-bc46)
+
+### What Changed
+- Added `livekit/agents/voice/transcription/filler_filter.py` to identify filler-only transcripts with configurable phrase sets.
+- Extended `AgentSession` and `AgentActivity` to accept a new `interruption_filler_phrases` option plus the `update_interruption_filler_phrases()` helper for live reconfiguration.
+- Thread-safe `AudioRecognition` filtering now skips filler events before they reach interruption logic.
+- Interruption handling emits structured debug logs for ignored vs. accepted cases (filler, thresholds, server turn detection, pause vs. hard interrupt).
+
+### What Works
+- Manual inspection confirms filler transcripts are blocked before `_interrupt_by_audio_activity` executes.
+- Dynamic updates to the filler list propagate immediately to the running `AudioRecognition` instance.
+- Debug logs surface the new ignore/accept paths, aiding troubleshooting without altering behavior for real speech.
+
+### Known Issues
+- Filler detection relies on basic tokenization; multi-language filler phrases may still require project-specific tuning.
+- Logs are emitted at `DEBUG` level; ensure your logging configuration surfaces them when diagnosing interruptions.
+
+### Steps to Test
+1. Launch any example voice agent (e.g., `python examples/voice_agents/basic_agent.py console`) with logging configured to show `livekit.agents.voice.agent_activity` at `DEBUG`.
+2. Speak only fillers such as “um” or “uh-huh” — no interruption should be triggered and the logs report `reason=filler-only`.
+3. Speak a short real phrase; the agent should pause or stop current speech with a log entry `action=pause` or `action=interrupt`.
+4. (Optional) Call `session.update_interruption_filler_phrases(["like", "you know"])` at runtime and repeat step 2 to confirm the dynamic list is honored.
+
+### Environment Details
+- Verified against `python>=3.10` (development done with Python 3.11) using dependencies from `pyproject.toml`.
+- Install via `pip install -e .[openai,silero,deepgram,cartesia,turn-detector]` to mirror the project extras used for agents.
+- No additional environment variables are required; configure logging with `logging.basicConfig(level=logging.DEBUG)` (or equivalent) to view the new interrupt diagnostics.
+
 ## Installation
 
 To install the core Agents library, along with plugins for popular model providers:

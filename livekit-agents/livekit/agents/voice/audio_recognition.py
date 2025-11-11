@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -19,6 +19,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
 from .agent import ModelSettings
+from .transcription.filler_filter import FillerPhraseFilter
 
 if TYPE_CHECKING:
     from .agent_session import TurnDetectionMode
@@ -80,6 +81,7 @@ class AudioRecognition:
         stt: io.STTNode | None,
         vad: vad.VAD | None,
         turn_detector: _TurnDetector | None,
+        filler_phrases: Sequence[str] | None = None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
         turn_detection_mode: TurnDetectionMode | None,
@@ -118,6 +120,7 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
+        self._filler_filter = FillerPhraseFilter(filler_phrases)
 
     def update_options(
         self,
@@ -133,6 +136,24 @@ class AudioRecognition:
     def start(self) -> None:
         self.update_stt(self._stt)
         self.update_vad(self._vad)
+
+    def update_filler_phrases(self, phrases: Sequence[str] | None) -> None:
+        """Update the filler phrases used to filter out interruptions."""
+        self._filler_filter.update_phrases(phrases)
+
+    def _should_ignore_transcript(self, text: str, event_type: stt.SpeechEventType) -> bool:
+        trimmed = text.strip()
+        if not trimmed:
+            return False
+
+        if self._filler_filter.is_filler(trimmed):
+            logger.debug(
+                "ignored potential interruption: filler-only transcript",
+                extra={"event_type": event_type.name, "transcript": trimmed},
+            )
+            return True
+
+        return False
 
     def stop(self) -> None:
         self.update_stt(None)
@@ -311,6 +332,10 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            if self._should_ignore_transcript(transcript, ev.type):
+                self._final_transcript_received.set()
+                return
+
             self._hooks.on_final_transcript(ev)
             logger.debug(
                 "received user transcript",
@@ -353,7 +378,6 @@ class AudioRecognition:
                     self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
-            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
@@ -366,6 +390,10 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            if self._should_ignore_transcript(transcript, ev.type):
+                return
+
+            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
             logger.debug(
                 "received user preflight transcript",
                 extra={"user_transcript": transcript, "language": self._last_language},
@@ -391,8 +419,13 @@ class AudioRecognition:
                 )
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+            transcript = ev.alternatives[0].text
+
+            if self._should_ignore_transcript(transcript, ev.type):
+                return
+
             self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
-            self._audio_interim_transcript = ev.alternatives[0].text
+            self._audio_interim_transcript = transcript
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with trace.use_span(self._ensure_user_turn_span()):

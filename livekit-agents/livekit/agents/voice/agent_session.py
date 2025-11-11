@@ -75,6 +75,7 @@ class VoiceOptions:
     discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
     min_interruption_words: int
+    interruption_filler_phrases: tuple[str, ...] | None
     min_endpointing_delay: float
     max_endpointing_delay: float
     max_tool_steps: int
@@ -158,6 +159,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
+        interruption_filler_phrases: NotGivenOr[Sequence[str] | None] = NOT_GIVEN,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 3.0,
         max_tool_steps: int = 3,
@@ -214,6 +216,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 register as an interruption. Default ``0.5`` s.
             min_interruption_words (int): Minimum number of words to consider
                 an interruption, only used if stt enabled. Default ``0``.
+            interruption_filler_phrases (Sequence[str] | None, optional):
+                Terms that count as filler-only speech and should not trigger interruptions.
+                When ``None`` or not provided, a built-in set of common fillers is used.
+                Provide an empty sequence to disable filler filtering entirely.
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
@@ -272,11 +278,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
+        filler_phrases_value = (
+            tuple(interruption_filler_phrases)
+            if is_given(interruption_filler_phrases) and interruption_filler_phrases is not None
+            else None
+        )
         self._opts = VoiceOptions(
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
             min_interruption_words=min_interruption_words,
+            interruption_filler_phrases=filler_phrases_value,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
@@ -771,6 +783,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
             )
+
+    def update_interruption_filler_phrases(self, phrases: Sequence[str] | None) -> None:
+        """Update the filler phrases that should be ignored for interruptions."""
+        stored = tuple(phrases) if phrases is not None else None
+        self._opts.interruption_filler_phrases = stored
+
+        if self._activity is not None:
+            self._activity.update_filler_phrases(stored)
+
+        if self._next_activity is not None:
+            self._next_activity.update_filler_phrases(stored)
 
     def say(
         self,

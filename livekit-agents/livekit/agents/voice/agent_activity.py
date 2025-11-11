@@ -343,6 +343,10 @@ class AgentActivity(RecognitionHooks):
                 max_endpointing_delay=max_endpointing_delay,
             )
 
+    def update_filler_phrases(self, phrases: Sequence[str] | None) -> None:
+        if self._audio_recognition:
+            self._audio_recognition.update_filler_phrases(phrases)
+
     def _create_speech_task(
         self,
         coro: Coroutine[Any, Any, Any],
@@ -543,6 +547,7 @@ class AgentActivity(RecognitionHooks):
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
+            filler_phrases=self.session.options.interruption_filler_phrases,
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
             turn_detection_mode=self._turn_detection_mode,
@@ -1108,17 +1113,33 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
+            logger.debug(
+                "ignored potential interruption",
+                extra={"reason": "server_turn_detection"},
+            )
             return
+
+        transcript_text = (
+            self._audio_recognition.current_transcript if self._audio_recognition else ""
+        )
 
         if (
             self.stt is not None
             and opt.min_interruption_words > 0
             and self._audio_recognition is not None
         ):
-            text = self._audio_recognition.current_transcript
-
             # TODO(long): better word splitting for multi-language
-            if len(split_words(text, split_character=True)) < opt.min_interruption_words:
+            word_count = len(split_words(transcript_text, split_character=True))
+            if word_count < opt.min_interruption_words:
+                logger.debug(
+                    "ignored potential interruption",
+                    extra={
+                        "reason": "min_interruption_words",
+                        "words": word_count,
+                        "threshold": opt.min_interruption_words,
+                        "transcript": transcript_text,
+                    },
+                )
                 return
 
         if self._rt_session is not None:
@@ -1137,13 +1158,30 @@ class AgentActivity(RecognitionHooks):
                 self._false_interruption_timer = None
 
             if use_pause and self._session.output.audio and self._session.output.audio.can_pause:
+                logger.debug(
+                    "user interruption accepted",
+                    extra={"action": "pause", "transcript": transcript_text},
+                )
                 self._session.output.audio.pause()
                 self._session._update_agent_state("listening")
             else:
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
 
+                logger.debug(
+                    "user interruption accepted",
+                    extra={"action": "interrupt", "transcript": transcript_text},
+                )
                 self._current_speech.interrupt()
+        else:
+            if transcript_text:
+                logger.debug(
+                    "ignored potential interruption",
+                    extra={
+                        "reason": "no_interruptible_speech",
+                        "transcript": transcript_text,
+                    },
+                )
 
     # region recognition hooks
 
