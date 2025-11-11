@@ -28,6 +28,7 @@ from ..metrics import (
 )
 from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
+from ..transcription.filters import is_filler_only
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from .agent import (
@@ -1068,6 +1069,25 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
+        opt = self._session.options
+        
+        # Check for filler-only segments if filtering is enabled
+        if opt.filter_filler_only_segments and ev.transcript:
+            if is_filler_only(ev.transcript, filler_words=opt.filler_words):
+                logger.debug(
+                    "ignored filler-only realtime transcription",
+                    extra={
+                        "transcript": ev.transcript,
+                        "is_final": ev.is_final,
+                        "filler_words": opt.filler_words,
+                    },
+                )
+                # Still emit the event but don't add to chat context if it's filler-only
+                self._session._user_input_transcribed(
+                    UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
+                )
+                return
+        
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
         )
@@ -1102,13 +1122,31 @@ class AgentActivity(RecognitionHooks):
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
-    def _interrupt_by_audio_activity(self) -> None:
+    def _interrupt_by_audio_activity(self, transcript: str | None = None) -> None:
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
             return
+
+        # Get transcript text for filtering
+        if transcript is None and self._audio_recognition is not None:
+            transcript = self._audio_recognition.current_transcript
+        elif transcript is None:
+            transcript = ""
+
+        # Check for filler-only segments if filtering is enabled
+        if opt.filter_filler_only_segments and transcript:
+            if is_filler_only(transcript, filler_words=opt.filler_words):
+                logger.debug(
+                    "ignored filler-only interruption",
+                    extra={
+                        "transcript": transcript,
+                        "filler_words": opt.filler_words,
+                    },
+                )
+                return
 
         if (
             self.stt is not None
@@ -1120,6 +1158,16 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
+
+        # Log valid interruption
+        if transcript:
+            logger.debug(
+                "valid interruption triggered",
+                extra={
+                    "transcript": transcript,
+                    "is_filler_only": False,
+                },
+            )
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
@@ -1184,17 +1232,42 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
+        transcript_text = ev.alternatives[0].text
+        opt = self._session.options
+
+        # Check for filler-only segments before emitting event
+        if opt.filter_filler_only_segments and transcript_text:
+            if is_filler_only(transcript_text, filler_words=opt.filler_words):
+                logger.debug(
+                    "ignored filler-only interim transcript",
+                    extra={
+                        "transcript": transcript_text,
+                        "is_final": False,
+                        "filler_words": opt.filler_words,
+                    },
+                )
+                # Still emit the event but don't trigger interruption
+                self._session._user_input_transcribed(
+                    UserInputTranscribedEvent(
+                        language=ev.alternatives[0].language,
+                        transcript=transcript_text,
+                        is_final=False,
+                        speaker_id=ev.alternatives[0].speaker_id,
+                    ),
+                )
+                return
+
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 language=ev.alternatives[0].language,
-                transcript=ev.alternatives[0].text,
+                transcript=transcript_text,
                 is_final=False,
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
 
-        if ev.alternatives[0].text:
-            self._interrupt_by_audio_activity()
+        if transcript_text:
+            self._interrupt_by_audio_activity(transcript=transcript_text)
 
             if (
                 speaking is False
@@ -1209,10 +1282,35 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
+        transcript_text = ev.alternatives[0].text
+        opt = self._session.options
+
+        # Check for filler-only segments before emitting event
+        if opt.filter_filler_only_segments and transcript_text:
+            if is_filler_only(transcript_text, filler_words=opt.filler_words):
+                logger.debug(
+                    "ignored filler-only final transcript",
+                    extra={
+                        "transcript": transcript_text,
+                        "is_final": True,
+                        "filler_words": opt.filler_words,
+                    },
+                )
+                # Still emit the event but don't trigger interruption
+                self._session._user_input_transcribed(
+                    UserInputTranscribedEvent(
+                        language=ev.alternatives[0].language,
+                        transcript=transcript_text,
+                        is_final=True,
+                        speaker_id=ev.alternatives[0].speaker_id,
+                    ),
+                )
+                return
+
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 language=ev.alternatives[0].language,
-                transcript=ev.alternatives[0].text,
+                transcript=transcript_text,
                 is_final=True,
                 speaker_id=ev.alternatives[0].speaker_id,
             ),

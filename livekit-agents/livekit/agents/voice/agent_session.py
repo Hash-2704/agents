@@ -85,6 +85,10 @@ class VoiceOptions:
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
+    filter_filler_only_segments: bool
+    """Whether to filter out filler-only transcription segments from triggering interruptions. Default True."""
+    filler_words: set[str] | None
+    """Custom set of filler words to filter. If None, uses default filler words. Default None."""
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -169,6 +173,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
+        filter_filler_only_segments: bool = True,
+        filler_words: NotGivenOr[set[str] | None] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -251,6 +257,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            filter_filler_only_segments (bool): Whether to filter out filler-only transcription
+                segments from triggering interruptions. When True, segments containing only filler
+                words (e.g., "um", "uh", "like") will not trigger interruptions. Default ``True``.
+            filler_words (set[str] | None, optional): Custom set of filler words to filter.
+                If None, uses default filler words. When NOT_GIVEN, uses default filler words.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -291,6 +302,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
+            filter_filler_only_segments=filter_filler_only_segments,
+            filler_words=filler_words if is_given(filler_words) else None,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -383,6 +396,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def options(self) -> VoiceOptions:
         return self._opts
+
+    def update_filler_words(self, filler_words: set[str] | None) -> None:
+        """Dynamically update the filler words list used for filtering.
+        
+        This method allows runtime updates to the filler words set, which is useful
+        for adapting to different speakers or languages. The update is thread-safe
+        and takes effect immediately for new transcription events.
+        
+        Args:
+            filler_words: New set of filler words to use. If None, resets to default filler words.
+        """
+        self._opts.filler_words = filler_words
+        logger.info(
+            "updated filler words list",
+            extra={
+                "filler_words_count": len(filler_words) if filler_words else None,
+                "using_default": filler_words is None,
+            },
+        )
 
     @property
     def conn_options(self) -> SessionConnectOptions:

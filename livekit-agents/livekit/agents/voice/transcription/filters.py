@@ -4,6 +4,16 @@ from typing import Literal
 
 TextTransforms = Literal["filter_markdown", "filter_emoji"]
 
+# Common English filler words and sounds
+DEFAULT_FILLER_WORDS = {
+    "um", "uh", "ah", "er", "eh", "hmm", "hm",
+    "like", "you know", "well", "so", "actually",
+    "basically", "literally", "kind of", "sort of",
+    "i mean", "you see", "right", "okay", "ok",
+    "yeah", "yep", "yup", "mm", "mhm", "uh-huh",
+    "huh", "oh", "ahh", "umm", "uhm",
+}
+
 
 def apply_text_transforms(
     text: AsyncIterable[str], transforms: Sequence[TextTransforms]
@@ -175,3 +185,57 @@ async def filter_emoji(text: AsyncIterable[str]) -> AsyncIterable[str]:
     async for chunk in text:
         filtered_chunk = EMOJI_PATTERN.sub("", chunk)
         yield filtered_chunk
+
+
+def is_filler_only(
+    transcript: str,
+    filler_words: set[str] | None = None,
+    case_sensitive: bool = False,
+) -> bool:
+    """
+    Check if a transcript contains only filler words.
+    
+    Args:
+        transcript: The transcript text to check
+        filler_words: Set of filler words to check against. If None, uses DEFAULT_FILLER_WORDS
+        case_sensitive: Whether to perform case-sensitive matching. Default False.
+    
+    Returns:
+        True if the transcript contains only filler words (or is empty), False otherwise.
+    """
+    if not transcript or not transcript.strip():
+        return True
+    
+    if filler_words is None:
+        filler_words = DEFAULT_FILLER_WORDS
+    
+    # Normalize transcript: lowercase if not case-sensitive, strip whitespace
+    normalized_transcript = transcript.strip()
+    if not case_sensitive:
+        normalized_transcript = normalized_transcript.lower()
+    
+    # Split into words, handling punctuation
+    # Remove punctuation and split on whitespace
+    words = re.sub(r"[^\w\s]", " ", normalized_transcript).split()
+    
+    if not words:
+        return True
+    
+    # Check if all words are filler words
+    # Also check for multi-word filler phrases
+    normalized_filler_words = filler_words if case_sensitive else {fw.lower() for fw in filler_words}
+    
+    # Check for exact match with multi-word fillers first
+    normalized_transcript_lower = normalized_transcript.lower() if not case_sensitive else normalized_transcript
+    for filler in normalized_filler_words:
+        if len(filler.split()) > 1:
+            # Multi-word filler - check if transcript matches exactly
+            if normalized_transcript_lower.strip() == filler:
+                return True
+    
+    # Check if all individual words are fillers
+    for word in words:
+        if word not in normalized_filler_words:
+            return False
+    
+    return True

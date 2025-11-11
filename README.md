@@ -360,6 +360,104 @@ Runs the agent with production-ready optimizations.
 
 The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
 
+## Filler Word Filtering Feature
+
+### What Changed
+
+This branch adds filler-only segment filtering to prevent interruptions triggered by filler words (e.g., "um", "uh", "like"). The implementation includes:
+
+- **New Module**: `livekit/agents/voice/transcription/filters.py`
+  - Added `is_filler_only()` function to detect filler-only transcription segments
+  - Includes `DEFAULT_FILLER_WORDS` set with common English filler words and sounds
+  - Supports custom filler word lists and case-insensitive matching
+
+- **New Parameters in `AgentSession`**:
+  - `filter_filler_only_segments` (bool, default: True): Enable/disable filler filtering
+  - `filler_words` (set[str] | None, default: None): Custom filler words set
+
+- **Updated `VoiceOptions` Dataclass**:
+  - Added `filter_filler_only_segments: bool` field
+  - Added `filler_words: set[str] | None` field
+
+- **Integration Points**:
+  - `agent_activity.py`: Modified `_interrupt_by_audio_activity()` to check for filler-only segments
+  - `agent_activity.py`: Updated `on_interim_transcript()` and `on_final_transcript()` to filter filler segments
+  - `agent_activity.py`: Updated `_on_input_audio_transcription_completed()` for realtime model transcriptions
+  - Added separate debug logging for ignored vs valid interruptions
+
+- **Dynamic Updates**:
+  - Added `AgentSession.update_filler_words()` method for runtime updates to the filler word list
+
+### What Works
+
+- ✅ Filler-only segments are filtered from triggering interruptions
+- ✅ Works with both STT-based and Realtime Model transcriptions
+- ✅ Separate logging for ignored filler segments vs valid interruptions
+- ✅ Configurable filler word list (default or custom)
+- ✅ Dynamic updates to filler word list at runtime
+- ✅ Thread-safe handling with LiveKit callbacks
+- ✅ Case-insensitive matching by default
+- ✅ Supports multi-word filler phrases (e.g., "you know", "kind of")
+
+### Known Issues
+
+- Filler word detection is currently English-focused. Multi-language support may require language-specific filler word sets.
+- The filter checks if ALL words in a segment are fillers. Segments with mixed filler and real words will still trigger interruptions (by design).
+- Empty or whitespace-only transcripts are treated as filler-only and filtered.
+
+### Steps to Test
+
+1. **Start the agent** with filler filtering enabled (default):
+   ```python
+   from livekit.agents import AgentSession
+   from livekit.plugins import deepgram, openai, silero
+   
+   session = AgentSession(
+       vad=silero.VAD.load(),
+       stt=deepgram.STT(),
+       llm=openai.LLM(),
+       filter_filler_only_segments=True,  # default
+   )
+   ```
+
+2. **Test with custom filler words**:
+   ```python
+   session = AgentSession(
+       vad=silero.VAD.load(),
+       stt=deepgram.STT(),
+       llm=openai.LLM(),
+       filler_words={"um", "uh", "custom_filler"},
+   )
+   ```
+
+3. **Test dynamic updates**:
+   ```python
+   # Update filler words at runtime
+   session.update_filler_words({"new_filler", "another_filler"})
+   ```
+
+4. **Verify behavior**:
+   - Say filler words only (e.g., "um uh like") - should NOT interrupt agent
+   - Say real speech (e.g., "hello how are you") - SHOULD interrupt agent
+   - Check logs for "ignored filler-only" vs "valid interruption triggered" messages
+
+5. **Disable filtering** (if needed):
+   ```python
+   session = AgentSession(
+       filter_filler_only_segments=False,
+       # ... other params
+   )
+   ```
+
+### Environment Details
+
+- **Python Version**: Python 3.10+ (compatible with Python 3.10, 3.11, 3.12, 3.13)
+- **Dependencies**: No additional dependencies required (uses existing `livekit-agents` dependencies)
+- **Configuration**: 
+  - Set `filter_filler_only_segments=False` to disable
+  - Provide custom `filler_words` set to override defaults
+  - Use `session.update_filler_words()` for runtime updates
+
 <!--BEGIN_REPO_NAV-->
 <br/><table>
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
